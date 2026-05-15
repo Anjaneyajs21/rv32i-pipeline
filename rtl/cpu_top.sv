@@ -20,6 +20,7 @@ module cpu_top (
     
     // ALU signals
     logic [3:0]  alu_ctrl;
+    logic [31:0] alu_a, alu_b;
     logic [31:0] alu_result;
     logic        alu_zero;
     
@@ -27,8 +28,12 @@ module cpu_top (
     logic        mem_we;
     logic [31:0] mem_rd;
     
+    // Control signals
+    logic alu_src; // 0=register, 1=immediate
+    logic mem_to_reg; // 0=alu result, 1=memory
+    
     // ─── Program Counter ───────────────────────────
-    always_ff @(posedge clk or posedge rst) begin
+    always_ff @(posedge clk) begin
         if (rst) pc <= 32'd0;
         else     pc <= pc_next;
     end
@@ -46,9 +51,7 @@ module cpu_top (
     assign rs1    = instr[19:15];
     assign rs2    = instr[24:20];
     assign funct7 = instr[31:25];
-    
-    // Immediate decode (I-type for now)
-    assign imm = {{20{instr[31]}}, instr[31:20]};
+    assign imm    = {{20{instr[31]}}, instr[31:20]};
     
     // ─── Register File ─────────────────────────────
     regfile REGFILE (
@@ -62,10 +65,14 @@ module cpu_top (
         .rd2 (rd2)
     );
     
+    // ─── ALU input mux ─────────────────────────────
+    assign alu_a = rd1;
+    assign alu_b = (alu_src) ? imm : rd2;
+    
     // ─── ALU ───────────────────────────────────────
     alu ALU (
-        .a        (rd1),
-        .b        (rd2),
+        .a        (alu_a),
+        .b        (alu_b),
         .alu_ctrl (alu_ctrl),
         .result   (alu_result),
         .zero     (alu_zero)
@@ -80,48 +87,62 @@ module cpu_top (
         .rd   (mem_rd)
     );
     
-    // ─── Simple Control (R-type only for now) ──────
+    // ─── Writeback mux ─────────────────────────────
+    assign reg_wd = (mem_to_reg) ? mem_rd : alu_result;
+    
+    // ─── Control Unit ──────────────────────────────
     always_comb begin
         // defaults
-        reg_we   = 1'b0;
-        mem_we   = 1'b0;
-        alu_ctrl = 4'b0000;
-        reg_wd   = alu_result;
-        pc_next  = pc + 32'd4;
+        reg_we     = 1'b0;
+        mem_we     = 1'b0;
+        alu_src    = 1'b0;
+        mem_to_reg = 1'b0;
+        alu_ctrl   = 4'b0000;
+        pc_next    = pc + 32'd4;
         
         case (opcode)
-            7'b0110011: begin // R-type (ADD, SUB, AND, OR)
-                reg_we = 1'b1;
-                case (funct3)
-                    3'b000: alu_ctrl = (funct7[5]) ? 4'b0001 : 4'b0000; // SUB : ADD
-                    3'b111: alu_ctrl = 4'b0010; // AND
-                    3'b110: alu_ctrl = 4'b0011; // OR
-                    3'b100: alu_ctrl = 4'b0100; // XOR
+            7'b0110011: begin // R-type (ADD, SUB, AND, OR, XOR)
+                reg_we  = 1'b1;
+                alu_src = 1'b0; // use rd2
+                case ({funct7[5], funct3})
+                    4'b0000: alu_ctrl = 4'b0000; // ADD
+                    4'b1000: alu_ctrl = 4'b0001; // SUB
+                    4'b0111: alu_ctrl = 4'b0010; // AND
+                    4'b0110: alu_ctrl = 4'b0011; // OR
+                    4'b0100: alu_ctrl = 4'b0100; // XOR
                     default: alu_ctrl = 4'b0000;
                 endcase
             end
             
-            7'b0010011: begin // I-type (ADDI)
-                reg_we   = 1'b1;
-                alu_ctrl = 4'b0000; // ADD
-                // use immediate instead of rs2
+            7'b0010011: begin // I-type (ADDI, ANDI, ORI)
+                reg_we  = 1'b1;
+                alu_src = 1'b1; // use immediate
+                case (funct3)
+                    3'b000: alu_ctrl = 4'b0000; // ADDI
+                    3'b111: alu_ctrl = 4'b0010; // ANDI
+                    3'b110: alu_ctrl = 4'b0011; // ORI
+                    default: alu_ctrl = 4'b0000;
+                endcase
             end
             
             7'b0000011: begin // Load (LW)
-                reg_we = 1'b1;
-                alu_ctrl = 4'b0000; // ADD for address
-                reg_wd = mem_rd;
+                reg_we     = 1'b1;
+                alu_src    = 1'b1; // address = rs1 + imm
+                alu_ctrl   = 4'b0000;
+                mem_to_reg = 1'b1; // write memory data to reg
             end
             
             7'b0100011: begin // Store (SW)
                 mem_we   = 1'b1;
-                alu_ctrl = 4'b0000; // ADD for address
+                alu_src  = 1'b1;
+                alu_ctrl = 4'b0000;
             end
             
             7'b1100011: begin // Branch (BEQ)
+                alu_src  = 1'b0;
                 alu_ctrl = 4'b0001; // SUB to compare
                 if (alu_zero)
-                    pc_next = pc + {{19{instr[31]}}, 
+                    pc_next = pc + {{19{instr[31]}},
                                     instr[31], instr[7],
                                     instr[30:25], instr[11:8], 1'b0};
             end

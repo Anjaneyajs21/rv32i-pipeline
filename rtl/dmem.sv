@@ -7,8 +7,8 @@ module dmem (
 );
     logic [31:0] mem [0:255];
     
-    assign rd = mem[addr[31:2]];
+    assign rd = mem[addr[9:2]];
     
     always_ff @(posedge clk)
-        if (we) mem[addr[31:2]] <= wd;
+        if (we) mem[addr[9:2]] <= wd;
 endmodule

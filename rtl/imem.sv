@@ -4,7 +4,7 @@ module imem (
 );
     logic [31:0] mem [0:255];
     
-    initial $readmemh("../sw/program.hex", mem);
+    initial $readmemh("sw/program.hex", mem);
     
-    assign instr = mem[addr[31:2]];
+    assign instr = mem[addr[9:2]];
 endmodule
